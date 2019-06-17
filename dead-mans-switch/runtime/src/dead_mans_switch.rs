@@ -77,15 +77,17 @@ decl_module! {
             let current_block = <system::Module<T>>::block_number();
             let execution_block = current_block + block_delay;
             let contract = Contract {
-                beneficiary,
+                beneficiary: beneficiary.clone(),
                 block_delay,
                 execution_block,
             };
             <Contracts<T>>::insert(&sender, &contract);
 
             <TrustorsArray<T>>::insert((sender.clone(), trustors_count), &sender);
-            <TrustorsCount<T>>::insert(&contract.beneficiary, new_trustors_count);
+            <TrustorsCount<T>>::insert(&beneficiary, new_trustors_count);
             <TrustorsIndex<T>>::insert(&sender, trustors_count);
+
+            Self::deposit_event(RawEvent::CreatedContract(sender, beneficiary, block_delay));
 
             Ok(())
         }
