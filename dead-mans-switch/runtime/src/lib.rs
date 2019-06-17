@@ -34,6 +34,19 @@ pub use runtime_primitives::{Permill, Perbill};
 pub use timestamp::BlockPeriod;
 pub use support::{StorageValue, construct_runtime};
 
+#[derive(Encode, Decode, Clone, PartialEq)]
+pub enum SuperCall<T> where T: balances::Trait {
+	Balances(BalancesCall<T>),
+}
+
+
+#[cfg(feature = "std")]
+impl <T> std::fmt::Debug for SuperCall<T> where T: balances::Trait {
+	fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+		write!(fmt, "balance call")
+	}
+}
+
 /// The type that is used for identifying authorities.
 pub type AuthorityId = <AuthoritySignature as Verify>::Signer;
 
@@ -55,8 +68,7 @@ pub type BlockNumber = u64;
 /// Index of an account's extrinsic in the chain.
 pub type Nonce = u64;
 
-/// Used for the module template in `./template.rs`
-mod template;
+mod dead_mans_switch;
 
 /// Opaque types. These are used by the CLI to instantiate machinery that don't need to know
 /// the specifics of the runtime. They can then be made to be agnostic over specific formats
@@ -187,8 +199,7 @@ impl sudo::Trait for Runtime {
 	type Proposal = Call;
 }
 
-/// Used for the module template in `./template.rs`
-impl template::Trait for Runtime {
+impl dead_mans_switch::Trait for Runtime {
 	type Event = Event;
 }
 
@@ -205,8 +216,7 @@ construct_runtime!(
 		Indices: indices,
 		Balances: balances,
 		Sudo: sudo,
-		// Used for the module template in `./template.rs`
-		TemplateModule: template::{Module, Call, Storage, Event<T>},
+		DeadMansSwitchModule: dead_mans_switch::{Module, Call, Storage, Event<T>},
 	}
 );
 
