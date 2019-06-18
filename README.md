@@ -1,8 +1,38 @@
-# dead-mans-switch
+# Design
 
-A new SRML-based Substrate node, ready for hacking.
+## Spec
 
-# Building
+Knowing that Dock is moving over to the Substrate framework, I decided to implement my solution as a Substrate Runtime Module.
+
+This module exposes an api which allows users to setup a "contract" which specifies how long they want to delay the switch execution and to whom they wish to hand over control of their account.
+
+Allowing users to act as other users was tricky due to my inexperience with Substrate but after perusing the "contract" module, I realized that I could create valid "signed" transactions on behalf of users within my module. So, in order to act as someone else, a user can specify 1) another user's address and 2) an unsigned transaction while calling my module.
+
+This module is intended to be ready as-is for a UI or CLI to interact with it. Most notably, the module maintains data structures to allow beneficiaries to look up their corresponding trustors.
+
+## Assumptions
+
+1. Control over an account is sufficient (private key knowledge is not required)
+
+1. The network is not able to be compromised such that a user's ping alive transactions are ignored. If this were possible, a beneficiary could maliciously stifle their trustor's transactions so that they could take over the trustor's account.
+
+1. Even after the switch is expired, it is still possible for the original user (trustor) to regain exclusive access to their account but they cannot revert any transactions their beneficiary may have made.
+
+1. Min block delay will not be updated. I could certainly handle this case but felt it was out of scope.
+
+1. Trustors cannot assign themselves to be their own beneficiaries.
+
+1. Only one beneficiary can be chosen at a time. Handling multiple beneficiaries sounded fun but out of scope.
+
+1. Only calls to the `balances` module can be made by the beneficiary. I initially added the groundwork for supporting other module calls but decided to decrease the scope to make the code cleaner and simpler.
+
+1. UI is out of scope. Unfortunately this means there is no way (that I know of) to interact with my module. I hope that the tests are sufficient to show the logic and operation of the module. But I would honestly be really happy to take on the task of hacking on a simple UI to make this interactable if that would be helpful.
+
+## Notes
+
+I originally intended to implement the task in a way to actually hand over the private key to the beneficiary. But I was unable to come up with a satisfactory solution. I would either need to trust some external service to store private keys (ideally encrypted with the beneficiaries keys) or make a cryptographic puzzle that would be hard enough such that it would take some large amount of compute power (and thus some rough estimate of time delay) to crack open a encrypted payload containing a beneficiary encrypted trustor private key.
+
+## Building
 
 Install Rust:
 
@@ -25,10 +55,10 @@ Build the WebAssembly binary:
 Build all native code:
 
 ```bash
-cargo build
+cargo build -- release
 ```
 
-# Run
+## Run
 
 You can start a development chain with:
 
@@ -36,33 +66,15 @@ You can start a development chain with:
 cargo run -- --dev
 ```
 
-Detailed logs may be shown by running the node with the following environment variables set: `RUST_LOG=debug RUST_BACKTRACE=1 cargo run -- --dev`.
-
-If you want to see the multi-node consensus algorithm in action locally, then you can create a local testnet with two validator nodes for Alice and Bob, who are the initial authorities of the genesis chain that have been endowed with testnet units. Give each node a name and expose them so they are listed on the Polkadot [telemetry site](https://telemetry.polkadot.io/#/Local%20Testnet). You'll need two terminal windows open.
-
-We'll start Alice's substrate node first on default TCP port 30333 with her chain database stored locally at `/tmp/alice`. The bootnode ID of her node is `QmQZ8TjTqeDj3ciwr93EJ95hxfDsb9pEYDizUAbWpigtQN`, which is generated from the `--node-key` value that we specify below:
+You can run tests with:
 
 ```bash
-cargo run -- \
-  --base-path /tmp/alice \
-  --chain=local \
-  --alice \
-  --node-key 0000000000000000000000000000000000000000000000000000000000000001 \
-  --telemetry-url ws://telemetry.polkadot.io:1024 \
-  --validator
+cargo test -p dead-mans-switch-runtime
 ```
 
-In the second terminal, we'll start Bob's substrate node on a different TCP port of 30334, and with his chain database stored locally at `/tmp/bob`. We'll specify a value for the `--bootnodes` option that will connect his node to Alice's bootnode ID on TCP port 30333:
+You can generate docs with:
 
 ```bash
-cargo run -- \
-  --base-path /tmp/bob \
-  --bootnodes /ip4/127.0.0.1/tcp/30333/p2p/QmQZ8TjTqeDj3ciwr93EJ95hxfDsb9pEYDizUAbWpigtQN \
-  --chain=local \
-  --bob \
-  --port 30334 \
-  --telemetry-url ws://telemetry.polkadot.io:1024 \
-  --validator
+cargo doc -p dead-mans-switch-runtime
+open target/doc/dead_mans_switch_runtime/dead_mans_switch/index.html
 ```
-
-Additional CLI usage options are available and may be shown by running `cargo run -- --help`.

@@ -7,9 +7,21 @@ use system::{ensure_signed, RawOrigin};
 
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
 #[cfg_attr(feature = "std", derive(Debug))]
+/// Contract contains the necessary info for a user to specify a beneficiary to take over their account at a future time.
+///
+/// Each user is allowed to specify a single `Contract` which defines when their account may be taken
+/// over if they are somehow incapacitated and cannot maintain their account.
+///
+/// When the `execution_block`
+/// number is reached, the `beneficiary` will be given access to the account. The original account
+/// holder can push back the `execution_block` number by sending a ping alive transaction, this will
+/// reset the `execution_block` value to be `block_delay` blocks beyond the current block.
 pub struct Contract<AccountId, BlockNumber> {
+    /// The account which will be given account take over privileges.
     beneficiary: AccountId,
+    /// The number of blocks in the future that will be used each time a user pings that they are "alive".
     block_delay: BlockNumber,
+    /// The block number at which the beneficiary is able to take over the account.
     execution_block: BlockNumber,
 }
 
@@ -49,6 +61,8 @@ decl_module! {
 
         fn deposit_event<T>() = default;
 
+        /// This call allows a user ("beneficiary") to act as another user ("trustor") in the event that
+        /// the "trustor" is incapacitated.
         pub fn act_as_trustor(origin, trustor: T::AccountId, call: BalancesCall<T>) -> Result {
             let sender = ensure_signed(origin)?;
 
@@ -68,6 +82,8 @@ decl_module! {
             Ok(())
         }
 
+        /// This call allows a user ("trustor") to specify another user ("beneficiary") to take over their account in the event that
+        /// they become incapacitated.
         pub fn create_contract(origin, beneficiary: T::AccountId, block_delay: T::BlockNumber) -> Result {
             let sender = ensure_signed(origin)?;
 
@@ -99,6 +115,7 @@ decl_module! {
             Ok(())
         }
 
+        /// This call allows a user ("trustor") to specify a new "beneficiary".
         pub fn update_beneficiary(origin, beneficiary: T::AccountId) -> Result {
             let sender = ensure_signed(origin)?;
 
@@ -143,6 +160,8 @@ decl_module! {
             Ok(())
         }
 
+        /// This call allows a user ("trustor") to specify a new "block delay" which will be
+        /// added to the current block number each time they "ping alive" to set a new execution block number.
         pub fn update_block_delay(origin, block_delay: T::BlockNumber) -> Result {
             let sender = ensure_signed(origin)?;
 
@@ -165,6 +184,7 @@ decl_module! {
             Ok(())
         }
 
+        /// This call allows a user ("trustor") to prolong the execution_block time.
         pub fn ping_alive(origin) -> Result {
             let sender = ensure_signed(origin)?;
 
