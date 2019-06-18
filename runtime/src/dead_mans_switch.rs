@@ -5,8 +5,6 @@ use support::dispatch::{Dispatchable, Result};
 use support::{decl_event, decl_module, decl_storage, ensure, StorageMap, StorageValue};
 use system::{ensure_signed, RawOrigin};
 
-#[derive(Encode, Decode, Default, Clone, PartialEq)]
-#[cfg_attr(feature = "std", derive(Debug))]
 /// Contract contains the necessary info for a user to specify a beneficiary to take over their account at a future time.
 ///
 /// Each user is allowed to specify a single `Contract` which defines when their account may be taken
@@ -16,6 +14,8 @@ use system::{ensure_signed, RawOrigin};
 /// number is reached, the `beneficiary` will be given access to the account. The original account
 /// holder can push back the `execution_block` number by sending a ping alive transaction, this will
 /// reset the `execution_block` value to be `block_delay` blocks beyond the current block.
+#[derive(Encode, Decode, Default, Clone, PartialEq)]
+#[cfg_attr(feature = "std", derive(Debug))]
 pub struct Contract<AccountId, BlockNumber> {
     /// The account which will be given account take over privileges.
     beneficiary: AccountId,
@@ -46,14 +46,24 @@ decl_event!(
 
 decl_storage! {
     trait Store for Module<T: Trait> as DeadMansSwitchModule {
+        /// Fetch the dead man's switch contract for an account.
         Contracts get(contract): map T::AccountId => Contract<T::AccountId, T::BlockNumber>;
 
-        // Common way of implementing vectors with maps in substrate
+        // The following "Trustors.." data structures are used to represent a list. This is
+        // a common approach given the constraints of substrate
+
+        /// This representation of a list of trustors allows beneficiaries to lookup their trustors
         TrustorsArray get(trustors_by_index): map (T::AccountId, u64) => T::AccountId;
+        /// The number of trustors a beneficiary has
         TrustorsCount get(trustors_count): map T::AccountId => u64;
+        /// The array index of a beneficiary's trustor
         TrustorsIndex get(trustor_index): map T::AccountId => u64;
 
+        /// The minimum block delay for a contract
         MinBlockDelay: T::BlockNumber = T::BlockNumber::sa(10);
+
+        /// The maximum block delay for a contract
+        MaxBlockDelay: T::BlockNumber = T::BlockNumber::sa(1_000_000_000);
     }
 }
 
@@ -83,8 +93,8 @@ decl_module! {
             Ok(())
         }
 
-        /// This call allows a user ("trustor") to specify another user ("beneficiary") to take over their account in the event that
-        /// they become incapacitated.
+        /// This call allows a user ("trustor") to specify another user ("beneficiary") to take
+        /// over their account in the event that they become incapacitated.
         pub fn create_contract(origin, beneficiary: T::AccountId, block_delay: T::BlockNumber) -> Result {
             let sender = ensure_signed(origin)?;
 
@@ -93,6 +103,9 @@ decl_module! {
 
             let min_block_delay = <MinBlockDelay<T>>::get();
             ensure!(block_delay >= min_block_delay, "Your block delay is too short");
+
+            let max_block_delay = <MaxBlockDelay<T>>::get();
+            ensure!(block_delay <= max_block_delay, "Your block delay is too long");
 
             let trustors_count = Self::trustors_count(&beneficiary);
             let new_trustors_count = trustors_count.checked_add(1)
@@ -132,6 +145,7 @@ decl_module! {
 
             <Contracts<T>>::remove(&sender);
 
+            // Prepare to remove the last trustor from the beneficiary's list
             let mut trustor_index = <TrustorsIndex<T>>::get(&sender);
             if trustor_index != new_trustors_count {
                 let last_trustor_id = <TrustorsArray<T>>::get((beneficiary.clone(), new_trustors_count));
@@ -174,7 +188,7 @@ decl_module! {
             current_contract.beneficiary = beneficiary.clone();
             <Contracts<T>>::insert(&sender, &current_contract);
 
-            // prepare to remove the last trustor from the previous beneficiary's list
+            // Prepare to remove the last trustor from the previous beneficiary's list
             let mut prev_trustor_index = <TrustorsIndex<T>>::get(&sender);
             if prev_trustor_index != new_prev_beneficiary_trustors_count {
                 let last_trustor_id = <TrustorsArray<T>>::get((prev_beneficiary.clone(), new_prev_beneficiary_trustors_count));
@@ -197,6 +211,9 @@ decl_module! {
 
         /// This call allows a user ("trustor") to specify a new "block delay" which will be
         /// added to the current block number each time they "ping alive" to set a new execution block number.
+        ///
+        /// A side effect of this call is that the `execution_block` will be updated to correspond with
+        /// the `block_delay`.
         pub fn update_block_delay(origin, block_delay: T::BlockNumber) -> Result {
             let sender = ensure_signed(origin)?;
 
@@ -204,6 +221,9 @@ decl_module! {
 
             let min_block_delay = <MinBlockDelay<T>>::get();
             ensure!(block_delay >= min_block_delay, "Your block delay is too short");
+
+            let max_block_delay = <MaxBlockDelay<T>>::get();
+            ensure!(block_delay <= max_block_delay, "Your block delay is too long");
 
             let current_block = <system::Module<T>>::block_number();
             let execution_block = current_block + block_delay;
@@ -219,7 +239,7 @@ decl_module! {
             Ok(())
         }
 
-        /// This call allows a user ("trustor") to prolong the execution_block time.
+        /// This call allows a user ("trustor") to prolong the `execution_block` time.
         pub fn ping_alive(origin) -> Result {
             let sender = ensure_signed(origin)?;
 
@@ -238,7 +258,6 @@ decl_module! {
     }
 }
 
-/// tests for this module
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,6 +372,13 @@ mod tests {
                 DMS::act_as_trustor(Origin::signed(2), 1, call),
                 "You cannot act as this trustor yet"
             );
+
+            System::set_block_number(11);
+            let call = BalancesCall::transfer(2, 51);
+            assert_noop!(
+                DMS::act_as_trustor(Origin::signed(2), 1, call),
+                "balance too low to send value"
+            );
         });
     }
 
@@ -393,6 +419,12 @@ mod tests {
             assert_noop!(
                 DMS::create_contract(Origin::signed(1), 2, 0),
                 "Your block delay is too short"
+            );
+
+            // check that long delay is disallowed
+            assert_noop!(
+                DMS::create_contract(Origin::signed(1), 2, 1_000_000_001),
+                "Your block delay is too long"
             );
 
             // check that account cannot set themselves as beneficiary
@@ -504,6 +536,21 @@ mod tests {
             assert_noop!(
                 DMS::update_block_delay(Origin::signed(10), 10),
                 "You do not have a current contract"
+            );
+
+            // create contract to give access to account #1 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(10), 1, 10));
+
+            // check that short delay is disallowed
+            assert_noop!(
+                DMS::update_block_delay(Origin::signed(10), 0),
+                "Your block delay is too short"
+            );
+
+            // check that long delay is disallowed
+            assert_noop!(
+                DMS::update_block_delay(Origin::signed(10), 1_000_000_001),
+                "Your block delay is too long"
             );
         });
     }

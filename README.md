@@ -18,7 +18,7 @@ This module is intended to be ready as-is for a UI or CLI to interact with it. M
 
 1. Even after the switch is expired, it is still possible for the original user (trustor) to regain exclusive access to their account but they cannot revert any transactions their beneficiary may have made.
 
-1. Min block delay will not be updated. I could certainly handle this case but felt it was out of scope.
+1. Min/max block delay will not be updated. I could certainly handle this case but felt it was out of scope.
 
 1. Trustors cannot assign themselves to be their own beneficiaries.
 
