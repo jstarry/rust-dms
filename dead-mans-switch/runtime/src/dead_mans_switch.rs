@@ -26,8 +26,8 @@ decl_event!(
 		ActedAs(AccountId, AccountId),
 		CreatedContract(AccountId, AccountId, BlockNumber),
 		BeneficiaryUpdated(AccountId, AccountId, AccountId),
-		BlockDelayUpdated(AccountId, BlockNumber),
-		PingedAlive(AccountId),
+		BlockDelayUpdated(AccountId, BlockNumber, BlockNumber),
+		PingedAlive(AccountId, BlockNumber),
 	}
 );
 
@@ -138,11 +138,41 @@ decl_module! {
         }
 
         pub fn update_block_delay(origin, block_delay: T::BlockNumber) -> Result {
-            unimplemented!()
+            let sender = ensure_signed(origin)?;
+
+            ensure!(<Contracts<T>>::exists(&sender), "You do not have a current contract");
+
+            let min_block_delay = <MinBlockDelay<T>>::get();
+            ensure!(block_delay >= min_block_delay, "Your block delay is too short");
+
+            let current_block = <system::Module<T>>::block_number();
+            let execution_block = current_block + block_delay;
+
+            let mut current_contract = Self::contract(&sender);
+            let prev_block_delay = current_contract.block_delay;
+            current_contract.block_delay = block_delay.clone();
+            current_contract.execution_block = execution_block.clone();
+            <Contracts<T>>::insert(&sender, &current_contract);
+
+            Self::deposit_event(RawEvent::BlockDelayUpdated(sender, prev_block_delay, block_delay));
+
+            Ok(())
         }
 
         pub fn ping_alive(origin) -> Result {
-            unimplemented!()
+            let sender = ensure_signed(origin)?;
+
+            ensure!(<Contracts<T>>::exists(&sender), "You do not have a current contract");
+
+            let mut current_contract = Self::contract(&sender);
+            let current_block = <system::Module<T>>::block_number();
+            let execution_block = current_block + current_contract.block_delay;
+            current_contract.execution_block = execution_block.clone();
+            <Contracts<T>>::insert(&sender, &current_contract);
+
+            Self::deposit_event(RawEvent::PingedAlive(sender, execution_block));
+
+            Ok(())
         }
     }
 }
@@ -199,6 +229,7 @@ mod tests {
     }
 
     type DMS = Module<Test>;
+    type System = system::Module<Test>;
 
     fn build_ext() -> runtime_io::TestExternalities<Blake2Hasher> {
         let mut t = system::GenesisConfig::<Test>::default()
@@ -235,6 +266,10 @@ mod tests {
         with_externalities(&mut build_ext(), || {
             // create a contract to give access to account #2 after 10 blocks of inactivity
             assert_ok!(DMS::create_contract(Origin::signed(1), 2, 10));
+
+            let contract = DMS::contract(1);
+            assert_eq!(contract.block_delay, 10);
+            assert_eq!(contract.execution_block, 11);
 
             // check that account #2 has one trustor
             assert_eq!(DMS::trustors_count(2), 1);
@@ -320,6 +355,58 @@ mod tests {
             assert_noop!(
                 DMS::update_beneficiary(Origin::signed(10), 10),
                 "You cannot use yourself as your beneficiary"
+            );
+        });
+    }
+
+    #[test]
+    fn update_block_delay_should_work() {
+        with_externalities(&mut build_ext(), || {
+            // create contract to give access to account #1 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(10), 1, 10));
+
+            // update block delay from 10 to 20
+            assert_ok!(DMS::update_block_delay(Origin::signed(10), 20));
+
+            let contract = DMS::contract(10);
+            assert_eq!(contract.block_delay, 20);
+            assert_eq!(contract.execution_block, 21);
+        });
+    }
+
+    #[test]
+    fn update_block_delay_should_fail() {
+        with_externalities(&mut build_ext(), || {
+            // check that trustors without beneficiaries cannot update block delay
+            assert_noop!(
+                DMS::update_block_delay(Origin::signed(10), 10),
+                "You do not have a current contract"
+            );
+        });
+    }
+
+    #[test]
+    fn ping_alive_should_work() {
+        with_externalities(&mut build_ext(), || {
+            // create contract to give access to account #1 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(10), 1, 10));
+
+            System::set_block_number(2);
+
+            assert_ok!(DMS::ping_alive(Origin::signed(10)));
+
+            let contract = DMS::contract(10);
+            assert_eq!(contract.execution_block, 12);
+        });
+    }
+
+    #[test]
+    fn ping_alive_should_fail() {
+        with_externalities(&mut build_ext(), || {
+            // check that trustors without beneficiaries cannot ping
+            assert_noop!(
+                DMS::ping_alive(Origin::signed(10)),
+                "You do not have a current contract"
             );
         });
     }
