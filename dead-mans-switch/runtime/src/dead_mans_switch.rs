@@ -1,4 +1,4 @@
-use super::SuperCall;
+use super::BalancesCall;
 use parity_codec::{Decode, Encode};
 use runtime_primitives::traits::As;
 use support::dispatch::{Dispatchable, Result};
@@ -23,7 +23,7 @@ decl_event!(
 		<T as system::Trait>::AccountId,
 		<T as system::Trait>::BlockNumber
 	{
-		ActedAs(AccountId, AccountId),
+		ActedAsTrustor(AccountId, AccountId),
 		CreatedContract(AccountId, AccountId, BlockNumber),
 		BeneficiaryUpdated(AccountId, AccountId, AccountId),
 		BlockDelayUpdated(AccountId, BlockNumber, BlockNumber),
@@ -49,16 +49,22 @@ decl_module! {
 
         fn deposit_event<T>() = default;
 
-        pub fn act_as(origin, r#as: T::AccountId, call: SuperCall<T>) -> Result {
-            let who = ensure_signed(origin)?;
+        pub fn act_as_trustor(origin, trustor: T::AccountId, call: BalancesCall<T>) -> Result {
+            let sender = ensure_signed(origin)?;
 
-            // TODO check if who can act as 'as'
+            ensure!(<Contracts<T>>::exists(&trustor), "You selected a trustor without a contract");
+            ensure!(sender != trustor, "You cannot act as yourself");
 
-            match call {
-                super::SuperCall::Balances(c) => c.dispatch(RawOrigin::Signed(r#as.clone()).into()),
-            }?;
+            let contract = Self::contract(&trustor);
+            ensure!(contract.beneficiary == sender, "You are not the beneficiary for this trustor");
 
-            Self::deposit_event(RawEvent::ActedAs(who, r#as));
+            let current_block = <system::Module<T>>::block_number();
+            ensure!(contract.execution_block <= current_block, "You cannot act as this trustor yet");
+
+            call.dispatch(RawOrigin::Signed(trustor.clone()).into())?;
+
+            Self::deposit_event(RawEvent::ActedAsTrustor(sender, trustor));
+
             Ok(())
         }
 
@@ -238,7 +244,7 @@ mod tests {
             .0;
         t.extend(
             balances::GenesisConfig::<Test> {
-                balances: vec![(0, 50), (1, 100)],
+                balances: vec![(1, 50), (2, 100)],
                 vesting: Default::default(),
                 existential_deposit: Default::default(),
                 creation_fee: Default::default(),
@@ -254,10 +260,44 @@ mod tests {
     }
 
     #[test]
-    fn act_as_should_work() {
+    fn act_as_trustor_should_work() {
         with_externalities(&mut build_ext(), || {
-            let super_call = SuperCall::Balances(balances::Call::transfer(0, 100));
-            assert_ok!(DMS::act_as(Origin::signed(0), 1, super_call));
+            // create a contract to give access to account #2 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(1), 2, 10));
+
+            System::set_block_number(11);
+
+            let call = BalancesCall::transfer(2, 50);
+            assert_ok!(DMS::act_as_trustor(Origin::signed(2), 1, call));
+        });
+    }
+
+    #[test]
+    fn act_as_trustor_should_fail() {
+        with_externalities(&mut build_ext(), || {
+            // create a contract to give access to account #2 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(1), 2, 10));
+
+            let call = BalancesCall::transfer(2, 50);
+            assert_noop!(
+                DMS::act_as_trustor(Origin::signed(2), 3, call.clone()),
+                "You selected a trustor without a contract"
+            );
+
+            assert_noop!(
+                DMS::act_as_trustor(Origin::signed(1), 1, call.clone()),
+                "You cannot act as yourself"
+            );
+
+            assert_noop!(
+                DMS::act_as_trustor(Origin::signed(3), 1, call.clone()),
+                "You are not the beneficiary for this trustor"
+            );
+
+            assert_noop!(
+                DMS::act_as_trustor(Origin::signed(2), 1, call),
+                "You cannot act as this trustor yet"
+            );
         });
     }
 
