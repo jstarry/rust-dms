@@ -30,17 +30,18 @@ pub trait Trait: balances::Trait {
 }
 
 decl_event!(
-	pub enum Event<T>
-	where
-		<T as system::Trait>::AccountId,
-		<T as system::Trait>::BlockNumber
-	{
-		ActedAsTrustor(AccountId, AccountId),
-		CreatedContract(AccountId, AccountId, BlockNumber),
-		BeneficiaryUpdated(AccountId, AccountId, AccountId),
-		BlockDelayUpdated(AccountId, BlockNumber, BlockNumber),
-		PingedAlive(AccountId, BlockNumber),
-	}
+    pub enum Event<T>
+    where
+        <T as system::Trait>::AccountId,
+        <T as system::Trait>::BlockNumber
+    {
+        ActedAsTrustor(AccountId, AccountId),
+        CreatedContract(AccountId, AccountId, BlockNumber),
+        BeneficiaryUpdated(AccountId, AccountId, AccountId),
+        BlockDelayUpdated(AccountId, BlockNumber, BlockNumber),
+        PingedAlive(AccountId, BlockNumber),
+        DeletedContract(AccountId),
+    }
 );
 
 decl_storage! {
@@ -50,7 +51,7 @@ decl_storage! {
         // Common way of implementing vectors with maps in substrate
         TrustorsArray get(trustors_by_index): map (T::AccountId, u64) => T::AccountId;
         TrustorsCount get(trustors_count): map T::AccountId => u64;
-        TrustorsIndex: map T::AccountId => u64;
+        TrustorsIndex get(trustor_index): map T::AccountId => u64;
 
         MinBlockDelay: T::BlockNumber = T::BlockNumber::sa(10);
     }
@@ -114,6 +115,40 @@ decl_module! {
 
             Ok(())
         }
+
+        /// This call allows a user ("trustor") to delete their contract.
+        pub fn delete_contract(origin) -> Result {
+            let sender = ensure_signed(origin)?;
+
+            ensure!(<Contracts<T>>::exists(&sender), "You do not have a current contract");
+            ensure!(<TrustorsIndex<T>>::exists(&sender), "Your account is in a bad state");
+
+            let current_contract = Self::contract(&sender);
+            let beneficiary = current_contract.beneficiary;
+
+            let trustors_count = Self::trustors_count(&beneficiary);
+            let new_trustors_count = trustors_count.checked_sub(1)
+                .ok_or("Underflow remove a trustor for this beneficiary")?;
+
+            <Contracts<T>>::remove(&sender);
+
+            let mut trustor_index = <TrustorsIndex<T>>::get(&sender);
+            if trustor_index != new_trustors_count {
+                let last_trustor_id = <TrustorsArray<T>>::get((beneficiary.clone(), new_trustors_count));
+                <TrustorsArray<T>>::insert((beneficiary.clone(), trustor_index), &last_trustor_id);
+                <TrustorsIndex<T>>::insert(last_trustor_id, trustor_index);
+                trustor_index = new_trustors_count;
+            }
+
+            <TrustorsArray<T>>::remove((beneficiary.clone(), trustor_index));
+            <TrustorsCount<T>>::insert(&beneficiary, new_trustors_count);
+            <TrustorsIndex<T>>::remove(&sender);
+
+            Self::deposit_event(RawEvent::DeletedContract(sender));
+
+            Ok(())
+        }
+
 
         /// This call allows a user ("trustor") to specify a new "beneficiary".
         pub fn update_beneficiary(origin, beneficiary: T::AccountId) -> Result {
@@ -364,6 +399,34 @@ mod tests {
             assert_noop!(
                 DMS::create_contract(Origin::signed(1), 1, 0),
                 "You cannot use yourself as your beneficiary"
+            );
+        });
+    }
+
+    #[test]
+    fn delete_contract_should_work() {
+        with_externalities(&mut build_ext(), || {
+            // create a contract to give access to account #2 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(1), 2, 10));
+
+            assert_ok!(DMS::delete_contract(Origin::signed(1)));
+            assert_eq!(<Contracts<Test>>::exists(1), false);
+
+            // check that account #2 does not have a trustor
+            assert_eq!(DMS::trustors_count(2), 0);
+
+            // check that indices are cleaned up
+            assert_eq!(DMS::trustor_index(1), 0);
+            assert_eq!(DMS::trustors_by_index((2, 0)), 0);
+        });
+    }
+
+    #[test]
+    fn delete_contract_should_fail() {
+        with_externalities(&mut build_ext(), || {
+            assert_noop!(
+                DMS::delete_contract(Origin::signed(1)),
+                "You do not have a current contract"
             );
         });
     }
