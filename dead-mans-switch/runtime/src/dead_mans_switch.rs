@@ -84,7 +84,7 @@ decl_module! {
             };
             <Contracts<T>>::insert(&sender, &contract);
 
-            <TrustorsArray<T>>::insert((sender.clone(), trustors_count), &sender);
+            <TrustorsArray<T>>::insert((beneficiary.clone(), trustors_count), &sender);
             <TrustorsCount<T>>::insert(&beneficiary, new_trustors_count);
             <TrustorsIndex<T>>::insert(&sender, trustors_count);
 
@@ -105,27 +105,29 @@ decl_module! {
             ensure!(prev_beneficiary != beneficiary, "Your beneficiary is already set to this account");
 
             let trustors_count = Self::trustors_count(&beneficiary);
+            let trustors_index = trustors_count;
             let new_trustors_count = trustors_count.checked_add(1)
                 .ok_or("Overflow adding a new trustor for this beneficiary")?;
 
             let prev_beneficiary_trustors_count = Self::trustors_count(&prev_beneficiary);
             let new_prev_beneficiary_trustors_count = prev_beneficiary_trustors_count.checked_sub(1)
-                .ok_or("Overflow removing trustor for previous beneficiary")?;
+                .ok_or("Underflow removing trustor for previous beneficiary")?;
 
             current_contract.beneficiary = beneficiary.clone();
             <Contracts<T>>::insert(&sender, &current_contract);
 
             // prepare to remove the last trustor from the previous beneficiary's list
-            let prev_trustor_index = <TrustorsIndex<T>>::get(&sender);
+            let mut prev_trustor_index = <TrustorsIndex<T>>::get(&sender);
             if prev_trustor_index != new_prev_beneficiary_trustors_count {
                 let last_trustor_id = <TrustorsArray<T>>::get((prev_beneficiary.clone(), new_prev_beneficiary_trustors_count));
                 <TrustorsArray<T>>::insert((prev_beneficiary.clone(), prev_trustor_index), &last_trustor_id);
                 <TrustorsIndex<T>>::insert(last_trustor_id, prev_trustor_index);
+                prev_trustor_index = new_prev_beneficiary_trustors_count;
             }
 
-            <TrustorsIndex<T>>::insert(&sender, trustors_count);
-            <TrustorsArray<T>>::remove((prev_beneficiary.clone(), new_prev_beneficiary_trustors_count));
-            <TrustorsArray<T>>::insert((beneficiary.clone(), new_trustors_count), &sender);
+            <TrustorsIndex<T>>::insert(&sender, trustors_index);
+            <TrustorsArray<T>>::remove((prev_beneficiary.clone(), prev_trustor_index));
+            <TrustorsArray<T>>::insert((beneficiary.clone(), trustors_index), &sender);
 
             <TrustorsCount<T>>::insert(&prev_beneficiary, new_prev_beneficiary_trustors_count);
             <TrustorsCount<T>>::insert(&beneficiary, new_trustors_count);
@@ -231,17 +233,17 @@ mod tests {
     #[test]
     fn create_contract_should_work() {
         with_externalities(&mut build_ext(), || {
-            // create a contract to give access to account #1 after 10 blocks of inactivity
-            assert_ok!(DMS::create_contract(Origin::signed(0), 1, 10));
+            // create a contract to give access to account #2 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(1), 2, 10));
 
-            // check that account #1 has one trustor
-            assert_eq!(DMS::trustors_count(1), 1);
+            // check that account #2 has one trustor
+            assert_eq!(DMS::trustors_count(2), 1);
 
-            // check that account #0 does not have a trustor
-            assert_eq!(DMS::trustors_count(0), 0);
+            // check that account #1 does not have a trustor
+            assert_eq!(DMS::trustors_count(1), 0);
 
-            // check that account #0 is trustor of account #1
-            assert_eq!(DMS::trustors_by_index((1, 0)), 0);
+            // check that account #1 is trustor of account #2
+            assert_eq!(DMS::trustors_by_index((2, 0)), 1);
         });
     }
 
@@ -274,20 +276,24 @@ mod tests {
     #[test]
     fn update_beneficiary_should_work() {
         with_externalities(&mut build_ext(), || {
-            // create a contract to give access to account #1 after 10 blocks of inactivity
-            assert_ok!(DMS::create_contract(Origin::signed(0), 1, 10));
+            // create contracts to give access to account #1 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(10), 1, 10));
+            assert_ok!(DMS::create_contract(Origin::signed(20), 1, 10));
 
             // update beneficiary from account #1 to account #2
-            assert_ok!(DMS::update_beneficiary(Origin::signed(0), 2));
+            assert_ok!(DMS::update_beneficiary(Origin::signed(20), 2));
 
             // check that account #2 has a trustor
             assert_eq!(DMS::trustors_count(2), 1);
 
-            // check that account #1 does not have a trustor
-            assert_eq!(DMS::trustors_count(1), 0);
+            // check that account #1 only has one trustor
+            assert_eq!(DMS::trustors_count(1), 1);
 
-            // check that account #0 is trustor of account #2
-            assert_eq!(DMS::trustors_by_index((2, 0)), 0);
+            // check that account #20 is a trustor of account #2
+            assert_eq!(DMS::trustors_by_index((2, 0)), 20);
+
+            // check that account #10 is a trustor of account #1
+            assert_eq!(DMS::trustors_by_index((1, 0)), 10);
         });
     }
 }
