@@ -25,14 +25,15 @@ decl_event!(
 	{
 		ActedAs(AccountId, AccountId),
 		CreatedContract(AccountId, AccountId, BlockNumber),
-		BeneficiaryUpdated(AccountId, AccountId),
+		BeneficiaryUpdated(AccountId, AccountId, AccountId),
+		BlockDelayUpdated(AccountId, BlockNumber),
 		PingedAlive(AccountId),
 	}
 );
 
 decl_storage! {
     trait Store for Module<T: Trait> as DeadMansSwitchModule {
-        Contracts: map T::AccountId => Contract<T::AccountId, T::BlockNumber>;
+        Contracts get(contract): map T::AccountId => Contract<T::AccountId, T::BlockNumber>;
 
         // Common way of implementing vectors with maps in substrate
         TrustorsArray get(trustors_by_index): map (T::AccountId, u64) => T::AccountId;
@@ -93,6 +94,48 @@ decl_module! {
         }
 
         pub fn update_beneficiary(origin, beneficiary: T::AccountId) -> Result {
+            let sender = ensure_signed(origin)?;
+
+            ensure!(<Contracts<T>>::exists(&sender), "You do not have a current contract");
+            ensure!(sender != beneficiary, "You cannot use yourself as your beneficiary");
+            ensure!(<TrustorsIndex<T>>::exists(&sender), "Your account is in a bad state");
+
+            let mut current_contract = Self::contract(&sender);
+            let prev_beneficiary = current_contract.beneficiary;
+            ensure!(prev_beneficiary != beneficiary, "Your beneficiary is already set to this account");
+
+            let trustors_count = Self::trustors_count(&beneficiary);
+            let new_trustors_count = trustors_count.checked_add(1)
+                .ok_or("Overflow adding a new trustor for this beneficiary")?;
+
+            let prev_beneficiary_trustors_count = Self::trustors_count(&prev_beneficiary);
+            let new_prev_beneficiary_trustors_count = prev_beneficiary_trustors_count.checked_sub(1)
+                .ok_or("Overflow removing trustor for previous beneficiary")?;
+
+            current_contract.beneficiary = beneficiary.clone();
+            <Contracts<T>>::insert(&sender, &current_contract);
+
+            // prepare to remove the last trustor from the previous beneficiary's list
+            let prev_trustor_index = <TrustorsIndex<T>>::get(&sender);
+            if prev_trustor_index != new_prev_beneficiary_trustors_count {
+                let last_trustor_id = <TrustorsArray<T>>::get((prev_beneficiary.clone(), new_prev_beneficiary_trustors_count));
+                <TrustorsArray<T>>::insert((prev_beneficiary.clone(), prev_trustor_index), &last_trustor_id);
+                <TrustorsIndex<T>>::insert(last_trustor_id, prev_trustor_index);
+            }
+
+            <TrustorsIndex<T>>::insert(&sender, trustors_count);
+            <TrustorsArray<T>>::remove((prev_beneficiary.clone(), new_prev_beneficiary_trustors_count));
+            <TrustorsArray<T>>::insert((beneficiary.clone(), new_trustors_count), &sender);
+
+            <TrustorsCount<T>>::insert(&prev_beneficiary, new_prev_beneficiary_trustors_count);
+            <TrustorsCount<T>>::insert(&beneficiary, new_trustors_count);
+
+            Self::deposit_event(RawEvent::BeneficiaryUpdated(sender, prev_beneficiary, beneficiary));
+
+            Ok(())
+        }
+
+        pub fn update_block_delay(origin, block_delay: T::BlockNumber) -> Result {
             unimplemented!()
         }
 
@@ -225,6 +268,26 @@ mod tests {
                 DMS::create_contract(Origin::signed(1), 1, 0),
                 "You cannot use yourself as your beneficiary"
             );
+        });
+    }
+
+    #[test]
+    fn update_beneficiary_should_work() {
+        with_externalities(&mut build_ext(), || {
+            // create a contract to give access to account #1 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(0), 1, 10));
+
+            // update beneficiary from account #1 to account #2
+            assert_ok!(DMS::update_beneficiary(Origin::signed(0), 2));
+
+            // check that account #2 has a trustor
+            assert_eq!(DMS::trustors_count(2), 1);
+
+            // check that account #1 does not have a trustor
+            assert_eq!(DMS::trustors_count(1), 0);
+
+            // check that account #0 is trustor of account #2
+            assert_eq!(DMS::trustors_by_index((2, 0)), 0);
         });
     }
 }
