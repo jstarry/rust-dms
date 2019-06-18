@@ -296,4 +296,31 @@ mod tests {
             assert_eq!(DMS::trustors_by_index((1, 0)), 10);
         });
     }
+
+    #[test]
+    fn update_beneficiary_should_fail() {
+        with_externalities(&mut build_ext(), || {
+            // create contracts to give access to account #1 after 10 blocks of inactivity
+            assert_ok!(DMS::create_contract(Origin::signed(10), 1, 10));
+            assert_ok!(DMS::create_contract(Origin::signed(20), 1, 10));
+
+            // check that the updated beneficiary needs to be different
+            assert_noop!(
+                DMS::update_beneficiary(Origin::signed(20), 1),
+                "Your beneficiary is already set to this account"
+            );
+
+            // check that trustors without beneficiaries cannot update
+            assert_noop!(
+                DMS::update_beneficiary(Origin::signed(30), 1),
+                "You do not have a current contract"
+            );
+
+            // check that beneficiaries cannot be set to be the same as the trustor
+            assert_noop!(
+                DMS::update_beneficiary(Origin::signed(10), 10),
+                "You cannot use yourself as your beneficiary"
+            );
+        });
+    }
 }
